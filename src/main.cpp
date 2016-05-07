@@ -2828,7 +2828,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         pfrom->fSuccessfullyConnected = true;
 
-        printf("version message: version %d, blocks=%d\n", pfrom->nVersion, pfrom->nStartingHeight);
+        printf("version message: version %d(%s), blocks=%d\n", pfrom->nVersion, pfrom->strSubVer.c_str(),pfrom->nStartingHeight);
 
         cPeerBlockCounts.input(pfrom->nStartingHeight);
 
@@ -3039,7 +3039,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             pindex = pindex->pnext;
         int nLimit = 500 + locator.GetDistanceBack();
         unsigned int nBytes = 0;
-        printf("getblocks %d to %s limit %d\n", (pindex ? pindex->nHeight : -1), hashStop.ToString().substr(0,20).c_str(), nLimit);
+        printf("getblocks %d to %s limit %d from %s (%i/%s)\n", (pindex ? pindex->nHeight : -1), hashStop.ToString().substr(0,20).c_str(), nLimit, pfrom->addr.ToString().c_str(), pfrom->nVersion, pfrom->strSubVer.c_str());
         for (; pindex; pindex = pindex->pnext)
         {
             if (pindex->GetBlockHash() == hashStop)
@@ -3177,7 +3177,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CBlock block;
         vRecv >> block;
 
-        printf("received block %s\n", block.GetHash().ToString().substr(0,20).c_str());
+        printf("received block %s from %s (%i/%s)\n", block.GetHash().ToString().substr(0,20).c_str(), pfrom->addr.ToString().c_str(), pfrom->nVersion, pfrom->strSubVer.c_str());
         // block.print();
 
         CInv inv(MSG_BLOCK, block.GetHash());
@@ -3185,6 +3185,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         if (ProcessBlock(pfrom, &block))
             mapAlreadyAskedFor.erase(inv);
+        else {
+            block.print();
+            pfrom->Misbehaving(20);
+            }
+
         if (block.nDoS) pfrom->Misbehaving(block.nDoS);
     }
 
@@ -3297,6 +3302,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
             BOOST_FOREACH(CNode* pnode, vNodes)
                 checkpoint.RelayTo(pnode);
         }
+        printf("checkpoint %s from %s (%i/%s)\n", checkpoint.hashCheckpoint.ToString().c_str(), pfrom->addr.ToString().c_str(), pfrom->nVersion, pfrom->strSubVer.c_str());
     }
 
     else
