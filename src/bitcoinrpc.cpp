@@ -428,6 +428,18 @@ Value getblockcount(const Array& params, bool fHelp)
 }
 
 
+Value getbestblockhash(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getbestblockhash\n"
+            "\nReturns the hash of the best (tip) block in the longest block chain.");
+
+    CBlock block;
+    CBlockIndex* pblockindex = mapBlockIndex[hashBestChain];
+    return pblockindex->phashBlock->GetHex();
+}
+
 // deprecated
 Value getblocknumber(const Array& params, bool fHelp)
 {
@@ -3087,6 +3099,7 @@ static const CRPCCommand vRPCCommands[] =
     { "help",                   &help,                   true },
     { "stop",                   &stop,                   true },
     { "getblockcount",          &getblockcount,          true },
+    { "getbestblockhash",       &getbestblockhash,	 true },
     { "getblocknumber",         &getblocknumber,         true },
     { "getconnectioncount",     &getconnectioncount,     true },
     { "getpeerinfo",            &getpeerinfo,            true },
