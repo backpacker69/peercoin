@@ -11,6 +11,7 @@
 
 #include <kernel.h>
 #include <validation.h>   // GetCoinAge()
+#include <utiltime.h>     // GetTime()
 
 // TODO remove the following dependencies
 #include <chain.h>
@@ -281,7 +282,8 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, CValidationState& state, c
 CAmount GetMinFee(const CTransaction& tx)
 {
     size_t nBytes = ::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION);
-    return GetMinFee(nBytes, tx.nTime);
+    uint32_t nTime = (tx.nVersion == 1) ? tx.nTime : GetTime();
+    return GetMinFee(nBytes, nTime);
 }
 
 CAmount GetMinFee(size_t nBytes, uint32_t nTime)
