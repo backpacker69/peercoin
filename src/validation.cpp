@@ -60,6 +60,8 @@
 /**
  * Global state
  */
+std::map<uint256, recentPoSHeadersValue> recentPoSHeaders;
+
 namespace {
     struct CBlockIndexWorkComparator
     {
@@ -3148,6 +3150,20 @@ bool CChainState::AcceptBlockHeader(const CBlockHeader& block, bool fProofOfStak
     if (pindex == nullptr)
         pindex = AddToBlockIndex(block, fSetAsPos);
 
+    // peercoin: remember new PoS headers in order to clean them up if needed
+    if (fProofOfStake) {
+        recentPoSHeadersValue value;
+        value.time = GetTime();
+        value.pindex = pindex;
+        recentPoSHeaders[pindex->GetBlockHash()] = value;
+    } else {
+        // PoW header: clear all PoS parrents from recentPoSHeaders, so that memory is freed ASAP
+        CBlockIndex *pindexTmp = pindex->pprev;
+        while (recentPoSHeaders.erase(pindexTmp->GetBlockHash())) {
+            pindexTmp = pindexTmp->pprev;
+            }
+    }
+
     if (ppindex)
         *ppindex = pindex;
 
@@ -3168,7 +3184,11 @@ bool ProcessNewBlockHeaders(int32_t& nPoSTemperature, const uint256& lastAccepte
     {
         LOCK(cs_main);
 
+        int nExpectedNext = -1;
+        int nPenalty = 0; // Unorder penalty
         int nCooling = POW_HEADER_COOLING;
+        int nExpectedHeight = chainActive.Height() + 1;
+
         if (headers[0].hashPrevBlock != lastAcceptedHeader && !lastAcceptedHeader.IsNull()) {
             nPoSTemperature += (18 + headers.size()) / 10;
             nCooling = 0;
@@ -3207,6 +3227,7 @@ bool ProcessNewBlockHeaders(int32_t& nPoSTemperature, const uint256& lastAccepte
                 nPoSTemperature = std::max((int)nPoSTemperature, 0);
             }
         }
+        CleanMapBlockIndex();
     }
     NotifyHeaderTip();
     return true;
@@ -3325,6 +3346,8 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, CVali
     AcceptPendingSyncCheckpoint();
 #endif
 
+    if (pindex->IsProofOfStake())  //ppcTODO : maybe move this up?
+        recentPoSHeaders.erase(pindex->GetBlockHash());
     return true;
 }
 
@@ -3360,6 +3383,7 @@ bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<cons
                 *fPoSDuplicate = true;
             vStakeSeen[ndx] = pindex->hashProofOfStake;
         }
+        CleanMapBlockIndex();
     }
 
     NotifyHeaderTip();
@@ -4552,4 +4576,49 @@ bool CheckBlockSignature(const CBlock& block)
         return key.Verify(block.GetHash(), block.vchBlockSig);
     }
     return false;
+}
+
+/** Comparison function for sorting the getchaintips heads.  */
+struct CompareBlocksByHeight2
+{
+    bool operator()(std::map<uint256, recentPoSHeadersValue>::const_iterator& a, std::map<uint256, recentPoSHeadersValue>::const_iterator& b) const
+    {
+        return ((*a).second.pindex->nHeight < (*b).second.pindex->nHeight);
+    }
+};
+
+// should be called inside lock cs_main
+void CleanMapBlockIndex() {
+    if (recentPoSHeaders.size() < 2000)
+        return;
+
+    if (IsInitialBlockDownload())
+        return;
+
+    std::vector< std::map<uint256, recentPoSHeadersValue>::const_iterator > vit;
+    vit.reserve(recentPoSHeaders.size());
+
+    for (auto it = recentPoSHeaders.cbegin(); it != recentPoSHeaders.cend(); it++) {
+        vit.push_back(it);
+    }
+
+    std::sort(vit.begin(), vit.end(), CompareBlocksByHeight2());
+
+    int64_t cTime = GetTime();
+    for (auto& it : vit) {
+        if ((*it).second.time + 10*60 < cTime || (*it).second.pindex->pprev->pprev == nullptr) {
+            (*it).second.pindex->pprev = nullptr;
+        }
+    }
+
+    for (auto& it : vit) {
+        if ((*it).second.pindex->pprev == nullptr) {
+            BlockMap::iterator mi = mapBlockIndex.find((*it).first);
+            assert(mi != mapBlockIndex.end());  // it should exist because no other function deletes specific elemets
+            delete (*mi).second;
+            mapBlockIndex.erase(mi);
+
+            recentPoSHeaders.erase(it);
+        }
+    }
 }
